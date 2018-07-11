@@ -6,107 +6,12 @@ import pyaudio
 import os
 
 
-RATE = 16000
-CHUNK = int(RATE / 10) 
-class MicrophoneStream(object):
-	"""Opens a recording stream as a generator yielding the audio chunks."""
-	counter = 0
-	def __init__(self, rate, chunk):
-		self._rate = rate
-		self._chunk = chunk
-
-		# Create a thread-safe buffer of audio data
-		self._buff = queue.Queue()
-		self.closed = True
-
-	def _startTimer(self):
-		start_timer = time.time()
-
-
-	def __enter__(self):
-		MicrophoneStream.counter += 1
-		self._audio_interface = pyaudio.PyAudio()
-		self._audio_stream = self._audio_interface.open(
-			format=pyaudio.paInt16,
-			# The API currently only supports 1-channel (mono) audio
-			# https://goo.gl/z757pE
-			channels=1, rate=self._rate,
-			input=True, frames_per_buffer=self._chunk,
-			# Run the audio stream asynchronously to fill the buffer object.
-			# This is necessary so that the input device's buffer doesn't
-			# overflow while the calling thread makes network requests, etc.
-			stream_callback=self._fill_buffer,
-		)
-		print "microphone enter"
-
-		self.closed = False
-		return self
-
-	def __exit__(self, type, value, traceback):
-		self._audio_stream.stop_stream()
-		self._audio_stream.close()
-		self.closed = True
-		# Signal the generator to terminate so that the client's
-		# streaming_recognize method will not block the process termination.
-		self._buff.put(None)
-		self._audio_interface.terminate()
-		print "microphone exit"
-		self.recording(self.recording_data)
-
-	def recording(self,data):
-		name = "file" + str(MicrophoneStream.counter) + ".wav"
-		dir = os.path.dirname(__file__)
-		filename = os.path.join(dir, 'resources',name)
-
-		waveFile = wave.open(filename, 'wb')
-		waveFile.setnchannels(1)
-		waveFile.setsampwidth(pyaudio.PyAudio().get_sample_size(pyaudio.paInt16))
-		waveFile.setframerate(RATE)
-		waveFile.writeframes(b''.join(data))
-		waveFile.close()
-
-
-
-	def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
-		"""Continuously collect data from the audio stream, into the buffer."""
-		#print ("indata",type(in_data))
-		self._buff.put(in_data)
-		return None, pyaudio.paContinue
-
-	def generator(self):
-		start_timer = time.time()
-		self.recording_data = []
-		while not self.closed and time.time() - start_timer < 25:
-			# Use a blocking get() to ensure there's at least one chunk of
-			# data, and stop iteration if the chunk is None, indicating the
-			# end of the audio stream.
-			chunk = self._buff.get()
-			if chunk is None:
-				return
-			data = [chunk]
-			#print data
-			# Now consume whatever other data's still buffered.
-			while True:
-				try:
-					chunk = self._buff.get(block=False)
-					if chunk is None:
-						return
-					data.append(chunk)
-				
-				except queue.Empty:
-					break
-			self.recording_data =  self.recording_data + data
-			yield b''.join(data)
-			#yield data
-		print "generator break"
-
-
 #?continuous=true
 import speech_recognition as sr
 
 class SpeechToTextClient(WebSocketClient):
 	def __init__(self):
-		ws_url = "wss://stream-tls10.watsonplatform.net/speech-to-text/api/v1/recognize"
+		ws_url = "wss://stream-tls10.watsonplatform.net/speech-to-text/api/v1/recognize?&acoustic_customization_id=7f5ea40e-ac4f-4fbd-a298-5b032c8dfafc&customization_id=dadff4e8-af0e-43b0-8f72-e45584aa8bcb"
 		#url="https://stream-tls10.watsonplatform.net/speech-to-text/api/v1"
 		username="1f5a4b93-6a45-4eba-adcf-0573289c00f4"
 		password="m1B5r4OPuQPu"
@@ -125,7 +30,8 @@ class SpeechToTextClient(WebSocketClient):
 
 	def opened(self):
 		self.send('{"action": "start", "content-type": "audio/l16;rate=16000"}')
-		self.stream_audio_thread = threading.Thread(target=self.stream_audio)
+		#self.send('{"continuous":True}')
+		self.stream_audio_thread = threading.Thread(target=self.test_audio)
 		self.stream_audio_thread.start()
 		#self.stream_audio()
 
@@ -159,7 +65,7 @@ class SpeechToTextClient(WebSocketClient):
 			data = stream.read(CHUNK)
 			#print data
 			self.send(bytearray(data),binary=True)
-			if time.time() - start > 5:    # Records for n seconds
+			if time.time() - start > 3:    # Records for n seconds
 				self.send(json.dumps({'action': 'stop'}))
 				return False
 		stream.stop_stream()
@@ -168,20 +74,22 @@ class SpeechToTextClient(WebSocketClient):
 
 	 	self.listening = False
 	 	self.stream_audio_thread.join()
-		WebSocketClient.close(self)
+		WebSocketClient.closed(self)
 
 	def test_audio(self):
 		r = sr.Recognizer()
 		with sr.Microphone(sample_rate=44100) as source:
 		    print("Say something!")
 		    audio = r.listen(source)
-		    self.send(bytearray(audio), binary=True)
+		    self.send(bytearray(audio.get_wav_data()), binary=True)
 		self.send(json.dumps({'action': 'stop'}))    
-	def close(self):
+	# def close(self):
+		
+	# 	WebSocketClient.closed(self, code, reason= None)
+	def closed(self, code, reason=None):
 		self.listening = False
 		self.stream_audio_thread.join()
-		WebSocketClient.close(self)
-
+        #print "Closed down", code, reason
 
 
 
